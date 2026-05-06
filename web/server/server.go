@@ -53,6 +53,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/options", s.handleOptions)
 	s.mux.HandleFunc("/api/convert", s.handleConvert)
 	s.mux.HandleFunc("/api/convert-url", s.handleConvertURL)
+	s.mux.HandleFunc("/api/preview", s.handlePreview)
 	s.mux.Handle("/static/", http.StripPrefix("/static/", fileServer))
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {

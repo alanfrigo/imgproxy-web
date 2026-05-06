@@ -26,6 +26,21 @@ web/
   static/              vanilla HTML/JS/CSS (embedded via embed.FS)
 ```
 
+## UX features
+
+- **Live preview (sticky panel)** — re-renders the first sample on every option
+  change (debounced 300ms, cancellable). Pick any uploaded file or pasted URL
+  as the preview sample.
+- **Saved presets** — name and reuse option combinations. Stored in
+  `localStorage`; export/import as JSON.
+- **Share link** — every option change is mirrored to `location.hash` (base64url
+  JSON). Copy the URL to share the exact configuration (no files included).
+- **Drag reorder + per-file rename + filename template** — drag handle on each
+  file card; rename inline; global template supports `{name}`, `{ext}`, `{i}`,
+  `{i:02d}` (zero-padded index).
+- **Local history** — last 20 batches are kept in `localStorage`. Click any
+  entry to reload its spec.
+
 ## Run locally (bare metal)
 
 Two processes, one shared directory:
@@ -49,15 +64,38 @@ IMGPROXY_WEB_BIND=:8081 \
 open http://localhost:8081
 ```
 
-## Run with Docker Compose
+## Run with Docker Compose (Tailscale-only access)
 
-```bash
-docker compose -f docker-compose.example.yml up
-open http://localhost:8081
-```
+The example compose file does not publish ports to the host. Access is via a
+[Tailscale](https://tailscale.com) sidecar — only members of your tailnet can
+reach the UI.
 
-The compose file mounts a shared volume on `/data/uploads` and points both
-services at it.
+1. Create a reusable auth key in the
+   [Tailscale admin console](https://login.tailscale.com/admin/settings/keys)
+   (Reusable + Pre-approved + tagged).
+2. Copy `.env.example` to `.env` and fill in `TS_AUTHKEY`:
+   ```bash
+   cp .env.example .env
+   $EDITOR .env
+   ```
+3. Bring everything up:
+   ```bash
+   docker compose -f docker-compose.example.yml --env-file .env up -d --build
+   ```
+4. Find the tailnet IP and open the UI:
+   ```bash
+   tailscale status | grep imgproxy-web
+   open http://<tailnet-ip>:8081
+   ```
+
+The three containers share the `tailscale` sidecar's network namespace
+(`network_mode: "service:tailscale"`). `imgproxy` binds `127.0.0.1:8080`
+(loopback only inside that namespace), and `imgproxy-web` binds the tailscale
+interface on `:8081`. There is no `ports:` mapping, so the host never exposes
+anything publicly.
+
+To run without Tailscale (loopback dev only), see "Run locally (bare metal)"
+above.
 
 ## HTTP API
 
@@ -69,6 +107,7 @@ services at it.
 | GET | `/api/options` | — | full option catalog (drives the form) |
 | POST | `/api/convert` | multipart: `file` (×N), `spec` (JSON) | ZIP |
 | POST | `/api/convert-url` | JSON: `{urls:[…], spec:{…}}` | ZIP |
+| POST | `/api/preview` | multipart (1 file + `spec`) **or** JSON `{url, spec}` | single processed image bytes |
 
 ### Spec shape
 
@@ -88,7 +127,9 @@ services at it.
     ]
   },
   // Or, fully formed (wins over `options` when both are present):
-  "raw": "rs:fit:800:600/q:85/f:avif"
+  "raw": "rs:fit:800:600/q:85/f:avif",
+  // Optional: rename ZIP entries with placeholders {name}, {ext}, {i}, {i:02d}.
+  "filename_template": "{i:03d}-{name}.{ext}"
 }
 ```
 

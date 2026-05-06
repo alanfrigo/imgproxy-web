@@ -1,23 +1,47 @@
-// imgproxy-web UI: vanilla JS, no build step. Loads the option catalog from
-// /api/options, generates a form, builds a Spec object, and POSTs to either
-// /api/convert (uploads) or /api/convert-url (remote URLs).
+// imgproxy-web UI: vanilla JS, no build step.
+//
+// Loads the option catalog from /api/options, generates a form, lives in
+// localStorage for presets/history, mirrors state to location.hash so links
+// share configuration, and renders a sticky live preview that calls
+// /api/preview on every change (debounced, cancellable).
 
 const $ = (sel) => document.querySelector(sel);
+const PRESETS_KEY = "imgproxy-web:presets";
+const HISTORY_KEY = "imgproxy-web:history";
+const HISTORY_MAX = 20;
 
 const state = {
-  files: [],          // File[]
+  files: [],          // {file: File, outputName: string, dragKey: string}
   catalog: null,
-  values: {},         // option key → input value(s)
+  values: {},         // option key → raw value
+  filenameTemplate: "{name}.{ext}",
+  raw: "",
+  previewIndex: 0,
+  presets: {},
+  history: [],
+};
+
+const debounce = (fn, ms) => {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 };
 
 (async function init() {
+  state.presets = readJSON(PRESETS_KEY, {});
+  state.history = readJSON(HISTORY_KEY, []);
   await pingHealth();
   await loadCatalog();
   bindSources();
   bindForm();
   bindActions();
+  bindTopbar();
+  applyHashState();          // restore from URL if present
+  refreshPresetSelect();
   refreshPreview();
+  schedulePreview();
 })();
+
+// --- Health + catalog ----------------------------------------------------
 
 async function pingHealth() {
   const el = $("#health");
@@ -43,7 +67,7 @@ async function loadCatalog() {
   renderForm();
 }
 
-// --- Form rendering ------------------------------------------------------
+// --- Form rendering (same as v1, generated from schema) ------------------
 
 function renderForm() {
   const root = $("#groups");
@@ -96,6 +120,7 @@ function renderField(opt) {
     case "filename": input = scalarInput(opt, "text"); break;
     default:         input = scalarInput(opt, "text");
   }
+  input.dataset.optKey = opt.key;
   wrap.appendChild(input);
   if (opt.description) {
     const d = document.createElement("div");
@@ -113,7 +138,6 @@ function isCompound(c) {
 function scalarInput(opt, type) {
   const i = document.createElement("input");
   i.type = type;
-  i.dataset.key = opt.key;
   if (opt.placeholder) i.placeholder = opt.placeholder;
   if (opt.default) i.placeholder = (opt.placeholder ? opt.placeholder + " · " : "") + "default: " + opt.default;
   if (opt.min != null) i.min = opt.min;
@@ -128,7 +152,6 @@ function boolInput(opt) {
   wrap.className = "row";
   const i = document.createElement("input");
   i.type = "checkbox";
-  i.dataset.key = opt.key;
   i.addEventListener("change", () => onChange(opt.key, i.checked));
   wrap.appendChild(i);
   return wrap;
@@ -136,7 +159,6 @@ function boolInput(opt) {
 
 function selectInput(opt) {
   const s = document.createElement("select");
-  s.dataset.key = opt.key;
   for (const c of opt.choices || []) {
     const o = document.createElement("option");
     o.value = c.value;
@@ -341,6 +363,8 @@ function onChange(key, val) {
     state.values[key] = val;
   }
   refreshPreview();
+  syncHash();
+  schedulePreview();
 }
 
 // --- Sources -------------------------------------------------------------
@@ -349,7 +373,6 @@ function bindSources() {
   const dz = $("#dropzone");
   const picker = $("#picker");
   const inp = $("#files");
-  const list = $("#filelist");
   picker.addEventListener("click", () => inp.click());
   inp.addEventListener("change", () => addFiles(Array.from(inp.files)));
   dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
@@ -358,49 +381,138 @@ function bindSources() {
     e.preventDefault(); dz.classList.remove("drag");
     addFiles(Array.from(e.dataTransfer.files));
   });
-  $("#urls").addEventListener("input", refreshPreview);
-
-  function addFiles(arr) {
-    state.files.push(...arr);
-    redraw();
-  }
-  function redraw() {
-    list.replaceChildren();
-    state.files.forEach((f, i) => {
-      const li = document.createElement("li");
-      const left = document.createElement("span");
-      left.append(document.createTextNode(f.name + " "));
-      const sz = document.createElement("span");
-      sz.className = "muted";
-      sz.textContent = "(" + humanBytes(f.size) + ")";
-      left.append(sz);
-      const rm = document.createElement("span");
-      rm.className = "rm";
-      rm.textContent = "remove";
-      rm.addEventListener("click", () => {
-        state.files.splice(i, 1);
-        redraw();
-      });
-      li.append(left, rm);
-      list.appendChild(li);
-    });
+  $("#urls").addEventListener("input", () => {
     refreshPreview();
+    schedulePreview();
+  });
+  $("#filename-template").addEventListener("input", (e) => {
+    state.filenameTemplate = e.target.value;
+    syncHash();
+    refreshPreview();
+  });
+}
+
+function addFiles(arr) {
+  for (const f of arr) {
+    state.files.push({ file: f, outputName: defaultOutputName(f.name), dragKey: cryptoRandom() });
   }
+  redrawFileList();
+  refreshPreviewSampleOptions();
+  refreshPreview();
+  schedulePreview();
+}
+
+function defaultOutputName(srcName) {
+  const dot = srcName.lastIndexOf(".");
+  return dot > 0 ? srcName.slice(0, dot) : srcName;
+}
+
+function cryptoRandom() {
+  const a = new Uint8Array(8);
+  crypto.getRandomValues(a);
+  return [...a].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function redrawFileList() {
+  const list = $("#filelist");
+  list.replaceChildren();
+  state.files.forEach((entry, i) => {
+    const card = document.createElement("div");
+    card.className = "file-card";
+    card.draggable = true;
+    card.dataset.idx = i;
+
+    const handle = document.createElement("span");
+    handle.className = "file-handle";
+    handle.textContent = "⠿";
+    card.appendChild(handle);
+
+    const thumb = document.createElement("img");
+    thumb.className = "file-thumb";
+    thumb.src = URL.createObjectURL(entry.file);
+    thumb.alt = "";
+    card.appendChild(thumb);
+
+    const meta = document.createElement("div");
+    meta.className = "file-name";
+    const top = document.createElement("div");
+    top.textContent = entry.file.name;
+    const sub = document.createElement("div");
+    sub.className = "file-meta";
+    sub.textContent = humanBytes(entry.file.size);
+    meta.append(top, sub);
+    card.appendChild(meta);
+
+    const ren = document.createElement("input");
+    ren.className = "file-rename";
+    ren.value = entry.outputName;
+    ren.placeholder = "output stem";
+    ren.addEventListener("input", () => {
+      state.files[i].outputName = ren.value;
+    });
+    card.appendChild(ren);
+
+    const rm = document.createElement("span");
+    rm.className = "file-rm";
+    rm.textContent = "✕";
+    rm.title = "remove";
+    rm.addEventListener("click", () => {
+      state.files.splice(i, 1);
+      redrawFileList();
+      refreshPreviewSampleOptions();
+      refreshPreview();
+      schedulePreview();
+    });
+    card.appendChild(rm);
+
+    card.addEventListener("dragstart", (e) => {
+      card.classList.add("dragging");
+      e.dataTransfer.setData("text/plain", String(i));
+      e.dataTransfer.effectAllowed = "move";
+    });
+    card.addEventListener("dragend", () => card.classList.remove("dragging"));
+    card.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      card.classList.add("dragover");
+    });
+    card.addEventListener("dragleave", () => card.classList.remove("dragover"));
+    card.addEventListener("drop", (e) => {
+      e.preventDefault();
+      card.classList.remove("dragover");
+      const from = Number(e.dataTransfer.getData("text/plain"));
+      if (Number.isNaN(from) || from === i) return;
+      const [moved] = state.files.splice(from, 1);
+      state.files.splice(i, 0, moved);
+      redrawFileList();
+      refreshPreviewSampleOptions();
+      refreshPreview();
+      schedulePreview();
+    });
+
+    list.appendChild(card);
+  });
 }
 
 // --- Spec building -------------------------------------------------------
 
 function buildSpec() {
-  const raw = $("#raw").value.trim();
-  if (raw) return { raw };
-  const opts = {};
-  for (const [k, v] of Object.entries(state.values)) {
-    if (v === null || v === undefined || v === "") continue;
-    if (Array.isArray(v) && v.length === 0) continue;
-    if (typeof v === "object" && !Array.isArray(v) && Object.values(v).every(x => x === "" || x === null || x === undefined || x === false)) continue;
-    opts[k] = coerce(k, v);
+  state.raw = $("#raw").value.trim();
+  const spec = {
+    filename_template: state.filenameTemplate,
+  };
+  if (state.raw) {
+    spec.raw = state.raw;
+  } else {
+    const opts = {};
+    for (const [k, v] of Object.entries(state.values)) {
+      if (v === null || v === undefined || v === "") continue;
+      if (Array.isArray(v) && v.length === 0) continue;
+      if (typeof v === "object" && !Array.isArray(v) && Object.values(v).every(x => x === "" || x === null || x === undefined || x === false)) continue;
+      opts[k] = coerce(k, v);
+    }
+    spec.options = opts;
   }
-  return { options: opts };
+  return spec;
 }
 
 function coerce(key, v) {
@@ -435,9 +547,7 @@ function refreshPreview() {
 function previewOptionsString(spec) {
   if (spec.raw) return spec.raw.replace(/^\/+|\/+$/g, "");
   const order = Object.keys(spec.options || {}).sort();
-  const parts = [];
-  for (const k of order) parts.push(localEncode(k, spec.options[k]));
-  return parts.filter(Boolean).join("/");
+  return order.map(k => localEncode(k, spec.options[k])).filter(Boolean).join("/");
 }
 
 function localEncode(key, val) {
@@ -503,10 +613,157 @@ function localEncode(key, val) {
   return "";
 }
 
-// --- Actions -------------------------------------------------------------
+// --- Live preview --------------------------------------------------------
+
+let previewAbort = null;
+const schedulePreview = debounce(() => runPreview(), 300);
+
+async function runPreview() {
+  const sample = pickSample();
+  const stateEl = $("#preview-state");
+  const srcImg = $("#preview-src");
+  const outImg = $("#preview-out");
+  const srcStats = $("#preview-src-stats");
+  const outStats = $("#preview-out-stats");
+  const summary = $("#preview-summary");
+
+  if (!sample) {
+    srcImg.removeAttribute("src");
+    outImg.removeAttribute("src");
+    srcStats.textContent = "—"; outStats.textContent = "—";
+    summary.classList.add("empty"); summary.textContent = "";
+    stateEl.textContent = "Drop a file or paste a URL to see a live preview.";
+    stateEl.classList.remove("error");
+    return;
+  }
+
+  // Source render.
+  if (sample.kind === "file") {
+    const url = URL.createObjectURL(sample.file);
+    srcImg.src = url;
+    srcStats.textContent = `${sample.file.name} · ${humanBytes(sample.file.size)}`;
+  } else {
+    srcImg.src = sample.url;
+    srcStats.textContent = sample.url;
+  }
+
+  if (previewAbort) previewAbort.abort();
+  previewAbort = new AbortController();
+
+  const spec = buildSpec();
+  stateEl.textContent = "rendering preview…";
+  stateEl.classList.remove("error");
+
+  try {
+    let resp;
+    if (sample.kind === "file") {
+      const fd = new FormData();
+      fd.append("file", sample.file);
+      fd.append("spec", JSON.stringify(spec));
+      resp = await fetch("/api/preview", { method: "POST", body: fd, signal: previewAbort.signal });
+    } else {
+      resp = await fetch("/api/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: sample.url, spec }),
+        signal: previewAbort.signal,
+      });
+    }
+    if (!resp.ok) {
+      const txt = await resp.text();
+      throw new Error(txt || resp.statusText);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    outImg.src = url;
+    outStats.textContent = `${humanBytes(blob.size)} · ${blob.type || "image"}`;
+
+    const srcSize = sample.kind === "file" ? sample.file.size : null;
+    if (srcSize) {
+      const delta = blob.size - srcSize;
+      const pct = ((delta / srcSize) * 100).toFixed(0);
+      const sign = delta >= 0 ? "+" : "−";
+      summary.textContent = `${humanBytes(srcSize)} → ${humanBytes(blob.size)}  (${sign}${Math.abs(pct)}%)`;
+      summary.classList.remove("empty");
+    } else {
+      summary.classList.add("empty"); summary.textContent = "";
+    }
+    stateEl.textContent = "";
+  } catch (e) {
+    if (e.name === "AbortError") return;
+    stateEl.textContent = "preview error: " + e.message;
+    stateEl.classList.add("error");
+    outImg.removeAttribute("src");
+    outStats.textContent = "—";
+    summary.classList.add("empty");
+  }
+}
+
+function pickSample() {
+  if (state.files.length > 0) {
+    const i = Math.min(state.previewIndex, state.files.length - 1);
+    return { kind: "file", file: state.files[i].file };
+  }
+  const urls = urlList();
+  if (urls.length > 0) {
+    const i = Math.min(state.previewIndex, urls.length - 1);
+    return { kind: "url", url: urls[i] };
+  }
+  return null;
+}
+
+function refreshPreviewSampleOptions() {
+  const sel = $("#preview-sample");
+  sel.replaceChildren();
+  const items = state.files.length > 0
+    ? state.files.map((e, i) => ({ value: i, label: `${i + 1}. ${e.file.name}` }))
+    : urlList().map((u, i) => ({ value: i, label: `${i + 1}. ${u}` }));
+  if (items.length === 0) {
+    const o = document.createElement("option");
+    o.value = ""; o.textContent = "(none)";
+    sel.appendChild(o);
+    return;
+  }
+  for (const it of items) {
+    const o = document.createElement("option");
+    o.value = String(it.value); o.textContent = it.label;
+    sel.appendChild(o);
+  }
+  sel.value = String(Math.min(state.previewIndex, items.length - 1));
+}
+
+// --- Top bar / actions ---------------------------------------------------
+
+function bindTopbar() {
+  $("#preset-save").addEventListener("click", presetSave);
+  $("#preset-delete").addEventListener("click", presetDelete);
+  $("#preset-export").addEventListener("click", presetExport);
+  $("#preset-import").addEventListener("click", () => $("#preset-import-file").click());
+  $("#preset-import-file").addEventListener("change", presetImport);
+  $("#preset-select").addEventListener("change", (e) => presetLoad(e.target.value));
+  $("#share").addEventListener("click", share);
+  $("#history-toggle").addEventListener("click", () => $("#history-drawer").hidden = false);
+  $("#history-close").addEventListener("click", () => $("#history-drawer").hidden = true);
+  $("#history-clear").addEventListener("click", () => {
+    state.history = [];
+    saveJSON(HISTORY_KEY, state.history);
+    redrawHistory();
+  });
+  $("#reset").addEventListener("click", reset);
+  $("#preview-sample").addEventListener("change", (e) => {
+    state.previewIndex = Number(e.target.value || 0);
+    schedulePreview();
+  });
+  $("#preview-refresh").addEventListener("click", () => runPreview());
+  redrawHistory();
+}
 
 function bindForm() {
-  $("#raw").addEventListener("input", refreshPreview);
+  $("#raw").addEventListener("input", () => {
+    refreshPreview();
+    syncHash();
+    schedulePreview();
+  });
 }
 
 function bindActions() {
@@ -527,8 +784,9 @@ async function convert() {
   }
   btn.disabled = true;
   status.textContent = `processing ${useUpload ? state.files.length : urls.length} item(s)…`;
+  const spec = buildSpec();
   try {
-    const blob = useUpload ? await postUpload() : await postURLs(urls);
+    const blob = useUpload ? await postUpload(spec) : await postURLs(urls, spec);
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "imgproxy-batch.zip";
@@ -537,6 +795,12 @@ async function convert() {
     a.remove();
     status.textContent = "done · ZIP downloaded";
     status.className = "status ok";
+    pushHistory({
+      ts: Date.now(),
+      count: useUpload ? state.files.length : urls.length,
+      sample: useUpload ? state.files[0]?.file.name : urls[0],
+      spec,
+    });
   } catch (e) {
     status.textContent = "error: " + e.message;
     status.className = "status error";
@@ -545,24 +809,221 @@ async function convert() {
   }
 }
 
-async function postUpload() {
+async function postUpload(spec) {
   const fd = new FormData();
-  fd.append("spec", JSON.stringify(buildSpec()));
-  for (const f of state.files) fd.append("file", f);
+  fd.append("spec", JSON.stringify(spec));
+  for (const entry of state.files) fd.append("file", entry.file, entry.outputName + "." + (entry.file.name.split(".").pop() || ""));
   const r = await fetch("/api/convert", { method: "POST", body: fd });
   if (!r.ok) throw new Error(await r.text());
   return r.blob();
 }
 
-async function postURLs(urls) {
+async function postURLs(urls, spec) {
   const r = await fetch("/api/convert-url", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ urls, spec: buildSpec() }),
+    body: JSON.stringify({ urls, spec }),
   });
   if (!r.ok) throw new Error(await r.text());
   return r.blob();
 }
+
+// --- Presets -------------------------------------------------------------
+
+function presetSave() {
+  const name = prompt("Preset name");
+  if (!name) return;
+  const spec = buildSpec();
+  state.presets[name] = { spec, raw: state.raw, filenameTemplate: state.filenameTemplate, values: structuredClone(state.values) };
+  saveJSON(PRESETS_KEY, state.presets);
+  refreshPresetSelect(name);
+}
+
+function presetDelete() {
+  const name = $("#preset-select").value;
+  if (!name || !state.presets[name]) return;
+  if (!confirm(`Delete preset "${name}"?`)) return;
+  delete state.presets[name];
+  saveJSON(PRESETS_KEY, state.presets);
+  refreshPresetSelect();
+}
+
+function presetLoad(name) {
+  if (!name) return;
+  const p = state.presets[name];
+  if (!p) return;
+  state.values = structuredClone(p.values || {});
+  state.raw = p.raw || "";
+  state.filenameTemplate = p.filenameTemplate || "{name}.{ext}";
+  $("#raw").value = state.raw;
+  $("#filename-template").value = state.filenameTemplate;
+  applyValuesToInputs();
+  syncHash();
+  refreshPreview();
+  schedulePreview();
+}
+
+function presetExport() {
+  const blob = new Blob([JSON.stringify(state.presets, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "imgproxy-web-presets.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function presetImport(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null) throw new Error("invalid presets file");
+    state.presets = { ...state.presets, ...parsed };
+    saveJSON(PRESETS_KEY, state.presets);
+    refreshPresetSelect();
+  } catch (err) {
+    alert("Import failed: " + err.message);
+  } finally {
+    e.target.value = "";
+  }
+}
+
+function refreshPresetSelect(selected) {
+  const sel = $("#preset-select");
+  sel.replaceChildren();
+  const blank = document.createElement("option");
+  blank.value = ""; blank.textContent = "(none)";
+  sel.appendChild(blank);
+  for (const name of Object.keys(state.presets).sort()) {
+    const o = document.createElement("option");
+    o.value = name; o.textContent = name;
+    sel.appendChild(o);
+  }
+  if (selected) sel.value = selected;
+}
+
+// --- URL hash state ------------------------------------------------------
+
+const syncHash = debounce(() => {
+  const payload = {
+    v: state.values,
+    r: state.raw,
+    t: state.filenameTemplate,
+  };
+  const enc = b64urlEncode(JSON.stringify(payload));
+  history.replaceState(null, "", "#" + enc);
+}, 150);
+
+function applyHashState() {
+  if (!location.hash || location.hash.length < 2) return;
+  try {
+    const json = b64urlDecode(location.hash.slice(1));
+    const data = JSON.parse(json);
+    state.values = data.v || {};
+    state.raw = data.r || "";
+    state.filenameTemplate = data.t || "{name}.{ext}";
+    $("#raw").value = state.raw;
+    $("#filename-template").value = state.filenameTemplate;
+    applyValuesToInputs();
+  } catch (e) { /* ignore bad hash */ }
+}
+
+function applyValuesToInputs() {
+  // Walk fields and set input values from state.values.
+  for (const fieldDiv of document.querySelectorAll(".field")) {
+    const input = fieldDiv.querySelector("[data-opt-key]");
+    if (!input) continue;
+    const key = input.dataset.optKey;
+    const val = state.values[key];
+    if (val === undefined) continue;
+    if (input.tagName === "SELECT") {
+      input.value = val;
+    } else if (input.type === "checkbox") {
+      input.checked = !!val;
+    } else if (input.tagName === "INPUT") {
+      input.value = typeof val === "object" ? "" : String(val);
+    }
+    // Compound values (gravity/crop/etc) lose their fine-grained inputs on hash
+    // restore — accepted limitation; raw mode is the workaround.
+  }
+}
+
+function share() {
+  syncHash.flush?.();
+  navigator.clipboard.writeText(location.href).then(
+    () => flashStatus("share link copied"),
+    () => flashStatus("copy failed: " + location.href, true),
+  );
+}
+
+function reset() {
+  if (!confirm("Reset all options?")) return;
+  state.values = {}; state.raw = ""; state.filenameTemplate = "{name}.{ext}";
+  $("#raw").value = ""; $("#filename-template").value = "{name}.{ext}";
+  document.querySelectorAll("[data-opt-key]").forEach(el => {
+    if (el.type === "checkbox") el.checked = false;
+    else el.value = el.tagName === "SELECT" ? (el.options[0]?.value ?? "") : "";
+  });
+  syncHash();
+  refreshPreview();
+  schedulePreview();
+}
+
+function flashStatus(msg, isErr) {
+  const s = $("#status");
+  s.textContent = msg;
+  s.className = "status " + (isErr ? "error" : "ok");
+  setTimeout(() => { s.textContent = ""; s.className = "status"; }, 1500);
+}
+
+// --- History -------------------------------------------------------------
+
+function pushHistory(entry) {
+  state.history.unshift(entry);
+  if (state.history.length > HISTORY_MAX) state.history.length = HISTORY_MAX;
+  saveJSON(HISTORY_KEY, state.history);
+  redrawHistory();
+}
+
+function redrawHistory() {
+  const list = $("#history-list");
+  list.replaceChildren();
+  if (state.history.length === 0) {
+    const li = document.createElement("li");
+    li.className = "muted";
+    li.textContent = "(empty)";
+    list.appendChild(li);
+    return;
+  }
+  for (const h of state.history) {
+    const li = document.createElement("li");
+    const t = document.createElement("div");
+    t.className = "h-time";
+    t.textContent = new Date(h.ts).toLocaleString() + ` · ${h.count} file(s)` + (h.sample ? ` · ${h.sample}` : "");
+    const s = document.createElement("div");
+    s.className = "h-spec";
+    const url = previewOptionsString(h.spec) || "(no options)";
+    s.textContent = url;
+    li.append(t, s);
+    li.addEventListener("click", () => {
+      state.values = (h.spec.options) || {};
+      state.raw = h.spec.raw || "";
+      state.filenameTemplate = h.spec.filename_template || "{name}.{ext}";
+      $("#raw").value = state.raw;
+      $("#filename-template").value = state.filenameTemplate;
+      applyValuesToInputs();
+      syncHash();
+      refreshPreview();
+      schedulePreview();
+      $("#history-drawer").hidden = true;
+    });
+    list.appendChild(li);
+  }
+}
+
+// --- utils ---------------------------------------------------------------
 
 function urlList() {
   return $("#urls").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
@@ -577,4 +1038,18 @@ function humanBytes(n) {
   let i = 0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
   return n.toFixed(n < 10 && i > 0 ? 1 : 0) + " " + u[i];
+}
+
+function readJSON(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key) || "") ?? fallback; }
+  catch { return fallback; }
+}
+function saveJSON(key, v) { localStorage.setItem(key, JSON.stringify(v)); }
+
+function b64urlEncode(s) {
+  return btoa(unescape(encodeURIComponent(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function b64urlDecode(s) {
+  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
+  return decodeURIComponent(escape(atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad)));
 }

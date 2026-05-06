@@ -16,44 +16,112 @@
   </nav>
 </header>
 
+<div id="topbar" class="card topbar">
+  <div class="presets-bar">
+    <label>Preset</label>
+    <select id="preset-select"><option value="">(none)</option></select>
+    <button id="preset-save" type="button">Save current</button>
+    <button id="preset-delete" type="button" title="Delete selected preset">✕</button>
+    <button id="preset-export" type="button" title="Download all presets as JSON">Export</button>
+    <button id="preset-import" type="button" title="Import presets JSON">Import</button>
+    <input type="file" id="preset-import-file" accept="application/json" hidden>
+  </div>
+  <div class="topbar-actions">
+    <button id="share" type="button" title="Copy a URL that reproduces this configuration">Share link</button>
+    <button id="history-toggle" type="button" title="Recent batches">History</button>
+    <button id="reset" type="button" title="Reset all options">Reset</button>
+  </div>
+</div>
+
 <main>
-  <section id="sources" class="card">
-    <h2>Sources</h2>
-    <div id="dropzone" class="dropzone">
-      <p><strong>Drop files here</strong> or <button type="button" id="picker">browse</button></p>
-      <input type="file" id="files" multiple hidden>
-      <ul id="filelist" class="filelist"></ul>
+  <div class="layout">
+    <div class="col-form">
+      <section id="sources" class="card">
+        <h2>Sources</h2>
+        <div id="dropzone" class="dropzone">
+          <p><strong>Drop files here</strong> or <button type="button" id="picker">browse</button></p>
+          <input type="file" id="files" multiple hidden>
+        </div>
+        <div id="filelist" class="filelist"></div>
+        <details>
+          <summary>Or paste remote URLs (one per line)</summary>
+          <textarea id="urls" rows="4" placeholder="https://example.com/photo.jpg
+https://example.com/another.png"></textarea>
+        </details>
+      </section>
+
+      <section id="naming" class="card">
+        <h2>Output naming</h2>
+        <label class="field">
+          <span>Filename template</span>
+          <input type="text" id="filename-template" placeholder="{name}.{ext}" value="{name}.{ext}">
+          <small class="desc">Placeholders: <code>{name}</code> stem, <code>{ext}</code> output extension, <code>{i}</code> 1-based index, <code>{i:02d}</code> zero-padded.</small>
+        </label>
+      </section>
+
+      <section id="form" class="card">
+        <h2>Processing options</h2>
+        <p class="muted">Every option imgproxy supports. Leave blank to skip.</p>
+        <div id="groups"></div>
+        <details class="raw-mode">
+          <summary>Raw URL options (escape hatch)</summary>
+          <p class="muted">Overrides the form above. Format: <code>opt:arg/opt:arg/…</code></p>
+          <textarea id="raw" rows="2" placeholder="rs:fit:800:600/q:85/f:webp"></textarea>
+        </details>
+      </section>
+
+      <section id="preview-text" class="card">
+        <h2>URL preview</h2>
+        <pre id="urlpreview" class="preview">—</pre>
+      </section>
+
+      <section id="actions" class="card">
+        <button id="convert" class="primary">Convert → ZIP</button>
+        <span id="status" class="status"></span>
+      </section>
     </div>
-    <details>
-      <summary>Or paste remote URLs (one per line)</summary>
-      <textarea id="urls" rows="4" placeholder="https://example.com/photo.jpg&#10;https://example.com/another.png"></textarea>
-    </details>
-  </section>
 
-  <section id="form" class="card">
-    <h2>Processing options</h2>
-    <p class="muted">Every option imgproxy supports. Leave a field blank to skip it.</p>
-    <div id="groups"></div>
-    <details class="raw-mode">
-      <summary>Raw URL options (escape hatch)</summary>
-      <p class="muted">Overrides the form above. Format: <code>opt:arg/opt:arg/...</code></p>
-      <textarea id="raw" rows="2" placeholder="rs:fit:800:600/q:85/f:webp"></textarea>
-    </details>
-  </section>
-
-  <section id="preview" class="card">
-    <h2>URL preview</h2>
-    <pre id="urlpreview" class="preview">—</pre>
-  </section>
-
-  <section id="actions" class="card">
-    <button id="convert" class="primary">Convert → ZIP</button>
-    <span id="status" class="status"></span>
-  </section>
+    <aside class="col-preview">
+      <div class="card preview-panel" id="preview-panel">
+        <h2>Live preview</h2>
+        <div class="preview-controls">
+          <label>Sample
+            <select id="preview-sample"><option value="">(none)</option></select>
+          </label>
+          <button id="preview-refresh" type="button" title="Re-run preview">↻</button>
+        </div>
+        <div class="preview-pair">
+          <div class="preview-cell">
+            <div class="cell-label">Source</div>
+            <img id="preview-src" alt="source preview">
+            <div class="cell-stats" id="preview-src-stats">—</div>
+          </div>
+          <div class="preview-cell">
+            <div class="cell-label">Result</div>
+            <img id="preview-out" alt="result preview">
+            <div class="cell-stats" id="preview-out-stats">—</div>
+          </div>
+        </div>
+        <div class="preview-summary" id="preview-summary"></div>
+        <div class="preview-state muted" id="preview-state">Drop a file to see a live preview here.</div>
+      </div>
+    </aside>
+  </div>
 </main>
 
+<div id="history-drawer" class="drawer" hidden>
+  <div class="drawer-head">
+    <h3>Recent batches</h3>
+    <button id="history-close" type="button">close</button>
+  </div>
+  <ul id="history-list" class="history-list"></ul>
+  <div class="drawer-foot">
+    <button id="history-clear" type="button">Clear history</button>
+  </div>
+</div>
+
 <footer>
-  <span class="muted">imgproxy-web · sidecar for bulk conversion · vanilla JS, no build step</span>
+  <span class="muted">imgproxy-web · sidecar · vanilla JS, no build step</span>
 </footer>
 
 <script src="/static/app.js"></script>

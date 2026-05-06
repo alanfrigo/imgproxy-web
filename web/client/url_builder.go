@@ -21,6 +21,13 @@ type Spec struct {
 	// Filename is the desired output filename (without extension); used by the
 	// server for ZIP entries and Content-Disposition. Not part of the URL.
 	Filename string `json:"filename,omitempty"`
+	// FilenameTemplate expands per-batch entry names using placeholders:
+	//   {name}    original stem (no ext)
+	//   {ext}     output extension (without dot)
+	//   {i}       1-based index
+	//   {i:02d}   zero-padded index, width N (any width >0)
+	// Empty template means "<stem>.<ext>".
+	FilenameTemplate string `json:"filename_template,omitempty"`
 }
 
 // Build returns the imgproxy options path segment (no leading/trailing slash).

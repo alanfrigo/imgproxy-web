@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -253,7 +254,7 @@ func guessName(url string) string {
 }
 
 // outputName picks the ZIP entry filename for a job, applying any format
-// override from the spec.
+// override + filename template from the spec.
 func outputName(j job, idx int) string {
 	base := j.origName
 	if base == "" {
@@ -265,19 +266,53 @@ func outputName(j job, idx int) string {
 	}
 	ext := j.spec.OutputExtension()
 	if ext == "" {
-		// Keep source extension if any.
 		if i := strings.LastIndex(base, "."); i > 0 {
 			ext = strings.ToLower(strings.TrimPrefix(base[i:], "."))
 		}
 	}
-	// Normalize jpg variants.
 	if ext == "jpeg" {
 		ext = "jpg"
 	}
-	if ext == "" {
-		return stem
+	tpl := strings.TrimSpace(j.spec.FilenameTemplate)
+	if tpl == "" {
+		if ext == "" {
+			return stem
+		}
+		return stem + "." + ext
 	}
-	return stem + "." + ext
+	return expandTemplate(tpl, stem, ext, idx+1)
+}
+
+// expandTemplate fills {name}, {ext}, {i}, {i:0Nd} placeholders.
+func expandTemplate(tpl, name, ext string, i int) string {
+	tpl = strings.ReplaceAll(tpl, "{name}", name)
+	tpl = strings.ReplaceAll(tpl, "{ext}", ext)
+	// Fixed-width index, e.g. {i:02d}.
+	for {
+		start := strings.Index(tpl, "{i:")
+		if start < 0 {
+			break
+		}
+		end := strings.Index(tpl[start:], "}")
+		if end < 0 {
+			break
+		}
+		end += start
+		spec := tpl[start+1 : end] // i:02d
+		var width int
+		// Accept both "i:02d" and "i:2".
+		fmt.Sscanf(spec, "i:%dd", &width)
+		if width == 0 {
+			fmt.Sscanf(spec, "i:%d", &width)
+		}
+		if width <= 0 {
+			width = 1
+		}
+		replacement := fmt.Sprintf("%0*d", width, i)
+		tpl = tpl[:start] + replacement + tpl[end+1:]
+	}
+	tpl = strings.ReplaceAll(tpl, "{i}", strconv.Itoa(i))
+	return tpl
 }
 
 // saveUpload writes a multipart file to disk.

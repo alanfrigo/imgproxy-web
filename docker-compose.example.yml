@@ -1,46 +1,69 @@
-# imgproxy + imgproxy-web sidecar with a shared upload volume.
+# imgproxy + imgproxy-web behind a Tailscale sidecar (internal-only access).
 #
-# Run:  docker compose -f docker-compose.example.yml up
-# Open: http://localhost:8081
+# Usage:
+#   cp .env.example .env       # then fill TS_AUTHKEY
+#   docker compose -f docker-compose.example.yml --env-file .env up -d --build
+#   tailscale status | grep imgproxy-web   # find the tailnet IP
+#   open http://<tailnet-ip>:8081
+#
+# imgproxy listens on 127.0.0.1:8080 inside the shared netns; only the sidecar
+# can reach it. imgproxy-web listens on the tailscale interface (no port is
+# mapped to the host — `ports:` is intentionally absent so the host stays
+# private; the only way in is via your tailnet).
 
 services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    hostname: ${TS_HOSTNAME:-imgproxy-web}
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY in .env}
+      TS_HOSTNAME: ${TS_HOSTNAME:-imgproxy-web}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    restart: unless-stopped
+
   imgproxy:
     image: ghcr.io/imgproxy/imgproxy:latest
+    network_mode: "service:tailscale"
+    depends_on:
+      - tailscale
     environment:
-      IMGPROXY_BIND: ":8080"
+      IMGPROXY_BIND: "127.0.0.1:8080"
       IMGPROXY_LOCAL_FILESYSTEM_ROOT: /data/uploads
       IMGPROXY_ALLOW_ORIGIN: "*"
-      # Bigger limits help with bulk:
-      IMGPROXY_MAX_SRC_RESOLUTION: "100"      # 100 MP
-      IMGPROXY_MAX_SRC_FILE_SIZE: "104857600" # 100 MiB
-      IMGPROXY_MAX_ANIMATION_FRAMES: "1024"
-      # Uncomment to require signatures (also set IMGPROXY_WEB_KEY/SALT below):
-      # IMGPROXY_KEY: "943b421c9eb07c830af81030552c86009268de4e532ba2ee2eab8247c6da0881"
-      # IMGPROXY_SALT: "520f986b998545b4785e0defbc4f3c1203f22de2374a3d53cb7a7fe9fea309c5"
+      IMGPROXY_MAX_SRC_RESOLUTION: ${IMGPROXY_MAX_SRC_RESOLUTION:-100}
+      IMGPROXY_MAX_SRC_FILE_SIZE: ${IMGPROXY_MAX_SRC_FILE_SIZE:-104857600}
+      IMGPROXY_MAX_ANIMATION_FRAMES: ${IMGPROXY_MAX_ANIMATION_FRAMES:-1024}
+      IMGPROXY_KEY: ${IMGPROXY_KEY:-}
+      IMGPROXY_SALT: ${IMGPROXY_SALT:-}
     volumes:
       - uploads:/data/uploads
-    ports:
-      - "8080:8080"
+    restart: unless-stopped
 
   imgproxy-web:
     build:
       context: .
       dockerfile: Dockerfile.web
+    network_mode: "service:tailscale"
+    depends_on:
+      - tailscale
+      - imgproxy
     environment:
-      IMGPROXY_WEB_BIND: ":8081"
-      IMGPROXY_WEB_IMGPROXY_URL: "http://imgproxy:8080"
+      IMGPROXY_WEB_BIND: "0.0.0.0:8081"
+      IMGPROXY_WEB_IMGPROXY_URL: "http://127.0.0.1:8080"
       IMGPROXY_WEB_UPLOAD_DIR: /data/uploads
-      IMGPROXY_WEB_MAX_UPLOAD_SIZE: "104857600"
-      IMGPROXY_WEB_MAX_BATCH: "200"
-      IMGPROXY_WEB_ALLOW_ORIGIN: "*"
-      # IMGPROXY_WEB_KEY: "943b421c..."
-      # IMGPROXY_WEB_SALT: "520f986b..."
+      IMGPROXY_WEB_MAX_UPLOAD_SIZE: ${IMGPROXY_WEB_MAX_UPLOAD_SIZE:-104857600}
+      IMGPROXY_WEB_MAX_BATCH: ${IMGPROXY_WEB_MAX_BATCH:-200}
+      IMGPROXY_WEB_KEY: ${IMGPROXY_KEY:-}
+      IMGPROXY_WEB_SALT: ${IMGPROXY_SALT:-}
+      IMGPROXY_WEB_BEARER: ${IMGPROXY_WEB_BEARER:-}
     volumes:
       - uploads:/data/uploads
-    ports:
-      - "8081:8081"
-    depends_on:
-      - imgproxy
+    restart: unless-stopped
 
 volumes:
   uploads:
+  tailscale-state:
