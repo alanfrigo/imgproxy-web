@@ -1,0 +1,84 @@
+:root {
+  color-scheme: dark;
+  --bg: #0d0f15;
+  --bg-elev: #161924;
+  --fg: #e6eaf2;
+  --muted: #8893a8;
+  --accent: #53d1ff;
+  --border: #232838;
+  --error: #ff7575;
+  --ok: #6ce39a;
+}
+* { box-sizing: border-box; }
+html, body { background: var(--bg); color: var(--fg); margin: 0; }
+body {
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+header {
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: 18px 28px; border-bottom: 1px solid var(--border);
+}
+header h1 { margin: 0; font-size: 20px; font-weight: 600; }
+header nav { display: flex; gap: 18px; align-items: center; }
+header nav a { color: var(--accent); text-decoration: none; font-size: 13px; }
+header nav a:hover { text-decoration: underline; }
+.health { font-size: 12px; color: var(--muted); padding: 2px 8px; border: 1px solid var(--border); border-radius: 4px; }
+.health.ok { color: var(--ok); border-color: var(--ok); }
+.health.bad { color: var(--error); border-color: var(--error); }
+main { max-width: 980px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+.card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; }
+.card h2 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.muted { color: var(--muted); }
+
+.dropzone {
+  border: 2px dashed var(--border); border-radius: 6px; padding: 22px;
+  text-align: center; transition: border-color .15s, background .15s;
+}
+.dropzone.drag { border-color: var(--accent); background: rgba(83,209,255,.06); }
+.dropzone p { margin: 0; }
+.dropzone button { color: var(--accent); background: transparent; border: 0; cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }
+.filelist { list-style: none; padding: 12px 0 0; margin: 0; text-align: left; max-height: 180px; overflow-y: auto; }
+.filelist li { display: flex; justify-content: space-between; padding: 4px 6px; font-size: 13px; border-bottom: 1px solid var(--border); }
+.filelist li:last-child { border-bottom: 0; }
+.filelist .rm { color: var(--error); cursor: pointer; }
+
+textarea, input, select {
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 6px 8px; font: inherit; width: 100%;
+}
+textarea { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+
+details summary { cursor: pointer; padding: 6px 0; color: var(--muted); }
+details[open] summary { color: var(--fg); }
+.raw-mode { margin-top: 12px; }
+
+.group { border-top: 1px solid var(--border); padding: 10px 0; }
+.group > summary { font-size: 13px; font-weight: 600; padding: 4px 0; }
+.group[open] > summary { color: var(--accent); }
+.group p.help { font-size: 12px; margin: 0 0 8px; }
+
+.fields {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 14px; padding: 8px 0;
+}
+.field { display: flex; flex-direction: column; gap: 3px; }
+.field label { font-size: 12px; color: var(--muted); }
+.field .desc { font-size: 11px; color: var(--muted); }
+.field .row { display: flex; gap: 6px; }
+.field input[type=checkbox] { width: auto; margin: 2px 0 0; }
+.field.compound { grid-column: span 2; }
+.compound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; }
+
+.preview { background: var(--bg); padding: 10px 12px; border: 1px solid var(--border); border-radius: 4px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+
+button.primary {
+  background: var(--accent); color: #002230; border: 0;
+  padding: 10px 18px; border-radius: 5px; font: inherit; font-weight: 600;
+  cursor: pointer;
+}
+button.primary:disabled { opacity: .5; cursor: not-allowed; }
+.status { margin-left: 14px; font-size: 13px; color: var(--muted); }
+.status.error { color: var(--error); }
+.status.ok { color: var(--ok); }
+
+footer { padding: 18px 28px; border-top: 1px solid var(--border); text-align: center; font-size: 12px; color: var(--muted); }

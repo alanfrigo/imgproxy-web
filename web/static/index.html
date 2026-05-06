@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>imgproxy web — bulk image converter</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>imgproxy <span class="muted">web</span></h1>
+  <nav>
+    <a href="https://docs.imgproxy.net" target="_blank" rel="noopener">docs ↗</a>
+    <a href="https://github.com/imgproxy/imgproxy" target="_blank" rel="noopener">github ↗</a>
+    <span id="health" class="health">…</span>
+  </nav>
+</header>
+
+<main>
+  <section id="sources" class="card">
+    <h2>Sources</h2>
+    <div id="dropzone" class="dropzone">
+      <p><strong>Drop files here</strong> or <button type="button" id="picker">browse</button></p>
+      <input type="file" id="files" multiple hidden>
+      <ul id="filelist" class="filelist"></ul>
+    </div>
+    <details>
+      <summary>Or paste remote URLs (one per line)</summary>
+      <textarea id="urls" rows="4" placeholder="https://example.com/photo.jpg&#10;https://example.com/another.png"></textarea>
+    </details>
+  </section>
+
+  <section id="form" class="card">
+    <h2>Processing options</h2>
+    <p class="muted">Every option imgproxy supports. Leave a field blank to skip it.</p>
+    <div id="groups"></div>
+    <details class="raw-mode">
+      <summary>Raw URL options (escape hatch)</summary>
+      <p class="muted">Overrides the form above. Format: <code>opt:arg/opt:arg/...</code></p>
+      <textarea id="raw" rows="2" placeholder="rs:fit:800:600/q:85/f:webp"></textarea>
+    </details>
+  </section>
+
+  <section id="preview" class="card">
+    <h2>URL preview</h2>
+    <pre id="urlpreview" class="preview">—</pre>
+  </section>
+
+  <section id="actions" class="card">
+    <button id="convert" class="primary">Convert → ZIP</button>
+    <span id="status" class="status"></span>
+  </section>
+</main>
+
+<footer>
+  <span class="muted">imgproxy-web · sidecar for bulk conversion · vanilla JS, no build step</span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

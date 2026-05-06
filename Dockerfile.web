@@ -1,0 +1,16 @@
+# imgproxy-web sidecar — bulk image converter UI for imgproxy.
+# Static binary, no cgo / libvips required.
+
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.work go.work.sum* ./
+COPY web ./web
+COPY go.mod go.sum ./
+# Trim go.work to web-only (avoid pulling imgproxy core deps that need cgo).
+RUN cd web && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+    -o /out/imgproxy-web ./cmd/imgproxy-web
+
+FROM gcr.io/distroless/static-debian12:latest
+COPY --from=build /out/imgproxy-web /imgproxy-web
+EXPOSE 8081
+ENTRYPOINT ["/imgproxy-web"]

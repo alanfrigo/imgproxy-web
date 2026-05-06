@@ -1,0 +1,46 @@
+# imgproxy + imgproxy-web sidecar with a shared upload volume.
+#
+# Run:  docker compose -f docker-compose.example.yml up
+# Open: http://localhost:8081
+
+services:
+  imgproxy:
+    image: ghcr.io/imgproxy/imgproxy:latest
+    environment:
+      IMGPROXY_BIND: ":8080"
+      IMGPROXY_LOCAL_FILESYSTEM_ROOT: /data/uploads
+      IMGPROXY_ALLOW_ORIGIN: "*"
+      # Bigger limits help with bulk:
+      IMGPROXY_MAX_SRC_RESOLUTION: "100"      # 100 MP
+      IMGPROXY_MAX_SRC_FILE_SIZE: "104857600" # 100 MiB
+      IMGPROXY_MAX_ANIMATION_FRAMES: "1024"
+      # Uncomment to require signatures (also set IMGPROXY_WEB_KEY/SALT below):
+      # IMGPROXY_KEY: "943b421c9eb07c830af81030552c86009268de4e532ba2ee2eab8247c6da0881"
+      # IMGPROXY_SALT: "520f986b998545b4785e0defbc4f3c1203f22de2374a3d53cb7a7fe9fea309c5"
+    volumes:
+      - uploads:/data/uploads
+    ports:
+      - "8080:8080"
+
+  imgproxy-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    environment:
+      IMGPROXY_WEB_BIND: ":8081"
+      IMGPROXY_WEB_IMGPROXY_URL: "http://imgproxy:8080"
+      IMGPROXY_WEB_UPLOAD_DIR: /data/uploads
+      IMGPROXY_WEB_MAX_UPLOAD_SIZE: "104857600"
+      IMGPROXY_WEB_MAX_BATCH: "200"
+      IMGPROXY_WEB_ALLOW_ORIGIN: "*"
+      # IMGPROXY_WEB_KEY: "943b421c..."
+      # IMGPROXY_WEB_SALT: "520f986b..."
+    volumes:
+      - uploads:/data/uploads
+    ports:
+      - "8081:8081"
+    depends_on:
+      - imgproxy
+
+volumes:
+  uploads:

@@ -1,6 +1,7 @@
 # imgproxy Makefile
 
 BINARY := ./imgproxy
+WEB_BINARY := ./imgproxy-web
 
 GOCMD := go
 GOBUILD := $(GOCMD) build
@@ -80,6 +81,21 @@ endif
 
 .PHONY: build-and-run
 build-and-run: build run
+
+# Build the imgproxy-web sidecar (UI + bulk converter).
+.PHONY: web
+web:
+	@$(GOBUILD) -v -o $(WEB_BINARY) ./web/cmd/imgproxy-web
+
+# Run unit tests for the web sidecar (no cgo / libvips required).
+.PHONY: web-test
+web-test:
+	@cd web && $(GOTEST) ./...
+
+# Clean web binary
+.PHONY: web-clean
+web-clean:
+	rm -f $(WEB_BINARY)
 
 # Run tests
 #
